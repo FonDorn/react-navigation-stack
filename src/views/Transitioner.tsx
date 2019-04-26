@@ -1,8 +1,52 @@
-import React from 'react';
-import { Animated, Easing, StyleSheet, View } from 'react-native';
-import invariant from '../utils/invariant';
+import * as React from 'react';
+import {
+  Animated,
+  Easing,
+  StyleSheet,
+  View,
+  LayoutChangeEvent,
+} from 'react-native';
 
 import NavigationScenesReducer from './ScenesReducer';
+import {
+  NavigationProp,
+  Scene,
+  SceneDescriptor,
+  TransitionerLayout,
+  TransitionProps,
+} from '../types';
+
+type TransitionSpec = {};
+
+type Props = {
+  render: (
+    current: TransitionProps,
+    previous: TransitionProps | null
+  ) => React.ReactNode;
+  configureTransition?: (
+    current: TransitionProps,
+    previous: TransitionProps | null
+  ) => TransitionSpec;
+  onTransitionStart?: (
+    current: TransitionProps,
+    previous: TransitionProps | null
+  ) => void | Promise<any>;
+  onTransitionEnd?: (
+    current: TransitionProps,
+    previous: TransitionProps | null
+  ) => void | Promise<any>;
+  navigation: NavigationProp;
+  descriptors: { [key: string]: SceneDescriptor };
+  options: {};
+  screenProps: any;
+};
+
+type State = {
+  layout: TransitionerLayout;
+  position: Animated.AnimatedInterpolation;
+  scenes: Scene[];
+  nextScenes?: Scene[];
+};
 
 // Used for all animations unless overriden
 const DefaultTransitionSpec = {
@@ -11,13 +55,22 @@ const DefaultTransitionSpec = {
   timing: Animated.timing,
 };
 
-class Transitioner extends React.Component {
-  constructor(props, context) {
-    super(props, context);
+class Transitioner extends React.Component<Props, State> {
+  _positionListener: string;
+
+  _prevTransitionProps: TransitionProps | null;
+  _transitionProps: TransitionProps;
+
+  _isMounted: boolean;
+  _isTransitionRunning: boolean;
+  _queuedTransition: { prevProps: Props } | null;
+
+  constructor(props: Props) {
+    super(props);
 
     // The initial layout isn't measured. Measured layout will be only available
     // when the component is mounted.
-    const layout = {
+    const layout: TransitionerLayout = {
       height: new Animated.Value(0),
       initHeight: 0,
       initWidth: 0,
@@ -65,7 +118,7 @@ class Transitioner extends React.Component {
       this.state.position.removeListener(this._positionListener);
   }
 
-  componentWillReceiveProps(nextProps) {
+  componentWillReceiveProps(nextProps: Props) {
     if (this._isTransitionRunning) {
       if (!this._queuedTransition) {
         this._queuedTransition = { prevProps: this.props };
@@ -76,7 +129,7 @@ class Transitioner extends React.Component {
     this._startTransition(this.props, nextProps);
   }
 
-  _computeScenes = (props, nextProps) => {
+  _computeScenes = (props: Props, nextProps: Props) => {
     let nextScenes = NavigationScenesReducer(
       this.state.scenes,
       nextProps.navigation.state,
@@ -101,7 +154,7 @@ class Transitioner extends React.Component {
     return nextScenes;
   };
 
-  _startTransition(props, nextProps) {
+  _startTransition(props: Props, nextProps: Props) {
     const indexHasChanged =
       props.navigation.state.index !== nextProps.navigation.state.index;
     let nextScenes = this._computeScenes(props, nextProps);
@@ -191,6 +244,7 @@ class Transitioner extends React.Component {
         delete transitionSpec.timing;
 
         // if swiped back, indexHasChanged == true && positionHasChanged == false
+        // @ts-ignore
         const positionHasChanged = position.__getValue() !== toValue;
         if (indexHasChanged && positionHasChanged) {
           timing(position, {
@@ -217,7 +271,7 @@ class Transitioner extends React.Component {
     );
   }
 
-  _onLayout = event => {
+  _onLayout = (event: LayoutChangeEvent) => {
     const { height, width } = event.nativeEvent.layout;
     if (
       this.state.layout.initWidth === width &&
@@ -225,7 +279,7 @@ class Transitioner extends React.Component {
     ) {
       return;
     }
-    const layout = {
+    const layout: TransitionerLayout = {
       ...this.state.layout,
       initHeight: height,
       initWidth: width,
@@ -283,14 +337,16 @@ class Transitioner extends React.Component {
   };
 }
 
-function buildTransitionProps(props, state) {
+function buildTransitionProps(props: Props, state: State): TransitionProps {
   const { navigation, options } = props;
 
   const { layout, position, scenes } = state;
 
   const scene = scenes.find(isSceneActive);
 
-  invariant(scene, 'Could not find active scene');
+  if (!scene) {
+    throw new Error('Could not find active scene');
+  }
 
   return {
     layout,
@@ -303,11 +359,11 @@ function buildTransitionProps(props, state) {
   };
 }
 
-function isSceneNotStale(scene) {
+function isSceneNotStale(scene: Scene) {
   return !scene.isStale;
 }
 
-function filterStale(scenes) {
+function filterStale(scenes: Scene[]) {
   const filtered = scenes.filter(isSceneNotStale);
   if (filtered.length === scenes.length) {
     return scenes;
@@ -315,7 +371,7 @@ function filterStale(scenes) {
   return filtered;
 }
 
-function isSceneActive(scene) {
+function isSceneActive(scene: Scene) {
   return scene.isActive;
 }
 

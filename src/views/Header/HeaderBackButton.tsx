@@ -1,4 +1,4 @@
-import React from 'react';
+import * as React from 'react';
 import {
   I18nManager,
   Image,
@@ -6,14 +6,23 @@ import {
   View,
   Platform,
   StyleSheet,
+  LayoutChangeEvent,
 } from 'react-native';
 
 import TouchableItem from '../TouchableItem';
 
 import defaultBackImage from '../assets/back-icon.png';
-import BackButtonWeb from './BackButton.web';
+import BackButtonWeb from './BackButtonWeb';
+import { HeaderBackbuttonProps } from '../../types';
 
-class HeaderBackButton extends React.PureComponent {
+type State = {
+  initialTextWidth?: number;
+};
+
+class HeaderBackButton extends React.PureComponent<
+  HeaderBackbuttonProps,
+  State
+> {
   static defaultProps = {
     pressColorAndroid: 'rgba(0, 0, 0, .32)',
     tintColor: Platform.select({
@@ -26,9 +35,9 @@ class HeaderBackButton extends React.PureComponent {
     }),
   };
 
-  state = {};
+  state: State = {};
 
-  _onTextLayout = e => {
+  _onTextLayout = (e: LayoutChangeEvent) => {
     if (this.state.initialTextWidth) {
       return;
     }
@@ -39,32 +48,28 @@ class HeaderBackButton extends React.PureComponent {
 
   _renderBackImage() {
     const { backImage, backTitleVisible, tintColor } = this.props;
-    let title = this._getTitleText();
 
-    let BackImage;
-    let props;
+    let title = this._getTitleText();
 
     if (React.isValidElement(backImage)) {
       return backImage;
     } else if (backImage) {
-      BackImage = backImage;
-      props = {
-        tintColor,
-        title,
-      };
-    } else {
-      BackImage = Image;
-      props = {
-        style: [
-          styles.icon,
-          !!backTitleVisible && styles.iconWithTitle,
-          !!tintColor && { tintColor },
-        ],
-        source: defaultBackImage,
-      };
-    }
+      const BackImage = backImage;
 
-    return <BackImage {...props} fadeDuration={0} />;
+      return <BackImage tintColor={tintColor} title={title} />;
+    } else {
+      return (
+        <Image
+          style={[
+            styles.icon,
+            !!backTitleVisible && styles.iconWithTitle,
+            !!tintColor && { tintColor },
+          ]}
+          source={defaultBackImage}
+          fadeDuration={0}
+        />
+      );
+    }
   }
 
   _getTitleText = () => {

@@ -1,19 +1,36 @@
-import React from 'react';
-import { I18nManager, Image, Text, View, StyleSheet } from 'react-native';
+import * as React from 'react';
+import {
+  I18nManager,
+  Image,
+  Text,
+  View,
+  StyleSheet,
+  LayoutChangeEvent,
+} from 'react-native';
 
 import TouchableItem from '../TouchableItem';
 
 import defaultBackImage from '../assets/back-icon.png';
+import { HeaderBackbuttonProps } from '../../types';
 
-class ModularHeaderBackButton extends React.PureComponent {
+type Props = HeaderBackbuttonProps & {
+  LabelContainerComponent: React.ComponentType;
+  ButtonContainerComponent: React.ComponentType;
+};
+
+type State = {
+  initialTextWidth?: number;
+};
+
+class ModularHeaderBackButton extends React.PureComponent<Props, State> {
   static defaultProps = {
     tintColor: '#037aff',
     truncatedTitle: 'Back',
   };
 
-  state = {};
+  state: State = {};
 
-  _onTextLayout = e => {
+  _onTextLayout = (e: LayoutChangeEvent) => {
     if (this.state.initialTextWidth) {
       return;
     }
@@ -25,29 +42,24 @@ class ModularHeaderBackButton extends React.PureComponent {
   _renderBackImage() {
     const { backImage, backTitleVisible, tintColor } = this.props;
 
-    let BackImage;
-    let props;
-
     if (React.isValidElement(backImage)) {
       return backImage;
     } else if (backImage) {
-      BackImage = backImage;
-      props = {
-        tintColor,
-      };
-    } else {
-      BackImage = Image;
-      props = {
-        style: [
-          styles.icon,
-          !!backTitleVisible && styles.iconWithTitle,
-          !!tintColor && { tintColor },
-        ],
-        source: defaultBackImage,
-      };
-    }
+      const BackImage = backImage;
 
-    return <BackImage {...props} />;
+      return <BackImage tintColor={tintColor} />;
+    } else {
+      return (
+        <Image
+          style={[
+            styles.icon,
+            !!backTitleVisible && styles.iconWithTitle,
+            !!tintColor && { tintColor },
+          ]}
+          source={defaultBackImage}
+        />
+      );
+    }
   }
 
   _getTitleText = () => {

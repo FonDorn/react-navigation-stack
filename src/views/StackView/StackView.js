@@ -1,4 +1,4 @@
-import React from 'react';
+import * as React from 'react';
 
 import { StackActions } from '@react-navigation/core';
 import StackViewLayout from './StackViewLayout';

@@ -1,4 +1,4 @@
-import React from 'react';
+import * as React from 'react';
 import {
   Animated,
   StyleSheet,
@@ -7,6 +7,9 @@ import {
   I18nManager,
   Easing,
   Dimensions,
+  StyleProp,
+  ViewStyle,
+  LayoutChangeEvent,
 } from 'react-native';
 import {
   SceneView,
@@ -16,7 +19,11 @@ import {
 } from '@react-navigation/core';
 import { withOrientation } from '@react-navigation/native';
 import { ScreenContainer } from 'react-native-screens';
-import { PanGestureHandler, State } from 'react-native-gesture-handler';
+import {
+  PanGestureHandler,
+  State as GestureState,
+  PanGestureHandlerGestureEvent,
+} from 'react-native-gesture-handler';
 
 import Card from './StackViewCard';
 import Header from '../Header/Header';
@@ -25,13 +32,56 @@ import HeaderStyleInterpolator from '../Header/HeaderStyleInterpolator';
 import StackGestureContext from '../../utils/StackGestureContext';
 import clamp from '../../utils/clamp';
 import { supportsImprovedSpringAnimation } from '../../utils/ReactNativeFeatures';
+import {
+  Scene,
+  HeaderMode,
+  TransitionProps,
+  TransitionConfig,
+  SceneInterpolator,
+} from '../../types';
+
+type HeaderTransitionConfig = {
+  headerLeftInterpolator: SceneInterpolator;
+  headerLeftLabelInterpolator: SceneInterpolator;
+  headerLeftButtonInterpolator: SceneInterpolator;
+  headerTitleFromLeftInterpolator: SceneInterpolator;
+  headerTitleInterpolator: SceneInterpolator;
+  headerRightInterpolator: SceneInterpolator;
+  headerBackgroundInterpolator: SceneInterpolator;
+  headerLayoutInterpolator: SceneInterpolator;
+};
+
+type Props = {
+  mode: 'modal' | 'card';
+  isLandscape: boolean;
+  shadowEnabled?: boolean;
+  cardOverlayEnabled?: boolean;
+  transparentCard?: boolean;
+  cardStyle?: StyleProp<ViewStyle>;
+  transitionProps: TransitionProps;
+  lastTransitionProps?: TransitionProps;
+  transitionConfig: (
+    transitionProps: TransitionProps,
+    prevTransitionProps?: TransitionProps,
+    isModal?: boolean
+  ) => HeaderTransitionConfig;
+  onGestureBegin?: () => void;
+  onGestureEnd?: () => void;
+  onGestureCanceled?: () => void;
+};
+
+type State = {
+  floatingHeaderHeight: number;
+};
 
 const IPHONE_XS_HEIGHT = 812; // iPhone X and XS
 const IPHONE_XR_HEIGHT = 896; // iPhone XR and XS Max
 const { width: WINDOW_WIDTH, height: WINDOW_HEIGHT } = Dimensions.get('window');
 const IS_IPHONE_X =
   Platform.OS === 'ios' &&
+  // @ts-ignore
   !Platform.isPad &&
+  // @ts-ignore
   !Platform.isTVOS &&
   (WINDOW_HEIGHT === IPHONE_XS_HEIGHT ||
     WINDOW_WIDTH === IPHONE_XS_HEIGHT ||
@@ -69,8 +119,9 @@ const GESTURE_RESPONSE_DISTANCE_VERTICAL = 135;
 
 const USE_NATIVE_DRIVER = true;
 
-const getDefaultHeaderHeight = isLandscape => {
+const getDefaultHeaderHeight = (isLandscape: boolean) => {
   if (Platform.OS === 'ios') {
+    // @ts-ignore
     if (isLandscape && !Platform.isPad) {
       return 32;
     } else if (IS_IPHONE_X) {
@@ -85,7 +136,18 @@ const getDefaultHeaderHeight = isLandscape => {
   }
 };
 
-class StackViewLayout extends React.Component {
+class StackViewLayout extends React.Component<Props, State> {
+  panGestureRef: React.RefObject<PanGestureHandler>;
+  gestureX: Animated.Value;
+  gestureY: Animated.Value;
+  positionSwitch: Animated.Value;
+  gestureSwitch: Animated.AnimatedInterpolation;
+  gestureEvent: (...args: any[]) => void;
+  gesturePosition: Animated.AnimatedInterpolation | undefined;
+
+  // @ts-ignore
+  position: Animated.AnimatedInterpolation;
+
   /**
    * immediateIndex is used to represent the expected index that we will be on after a
    * transition. To achieve a smooth animation when swiping back, the action to go back
@@ -93,9 +155,11 @@ class StackViewLayout extends React.Component {
    * the transition so that gestures can be handled correctly. This is a work-around for
    * cases when the user quickly swipes back several times.
    */
-  _immediateIndex = null;
+  _immediateIndex: number | null = null;
+  _transitionConfig: HeaderTransitionConfig & TransitionConfig | undefined;
+  _prevProps: Props | undefined;
 
-  constructor(props) {
+  constructor(props: Props) {
     super(props);
     this.panGestureRef = React.createRef();
     this.gestureX = new Animated.Value(0);
@@ -133,7 +197,7 @@ class StackViewLayout extends React.Component {
     };
   }
 
-  _renderHeader(scene, headerMode) {
+  _renderHeader(scene: Scene, headerMode: HeaderMode) {
     const { options } = scene.descriptor;
     const { header } = options;
 
@@ -153,14 +217,16 @@ class StackViewLayout extends React.Component {
     }
 
     // Handle the case where the header option is a function, and provide the default
-    const renderHeader = header || (props => <Header {...props} />);
+    const renderHeader =
+      header ||
+      ((props: React.ComponentProps<typeof Header>) => <Header {...props} />);
 
     let {
       headerLeftInterpolator,
       headerTitleInterpolator,
       headerRightInterpolator,
       headerBackgroundInterpolator,
-    } = this._transitionConfig;
+    } = this._transitionConfig as HeaderTransitionConfig;
 
     const backgroundTransitionPresetInterpolator = this._getHeaderBackgroundTransitionPreset();
     if (backgroundTransitionPresetInterpolator) {
@@ -189,8 +255,9 @@ class StackViewLayout extends React.Component {
     );
   }
 
-  _reset(resetToIndex, duration) {
+  _reset(resetToIndex: number, duration: number) {
     if (Platform.OS === 'ios' && supportsImprovedSpringAnimation()) {
+      // @ts-ignore
       Animated.spring(this.props.transitionProps.position, {
         toValue: resetToIndex,
         stiffness: 6000,
@@ -202,6 +269,7 @@ class StackViewLayout extends React.Component {
         useNativeDriver: USE_NATIVE_DRIVER,
       }).start();
     } else {
+      // @ts-ignore
       Animated.timing(this.props.transitionProps.position, {
         toValue: resetToIndex,
         duration,
@@ -211,7 +279,7 @@ class StackViewLayout extends React.Component {
     }
   }
 
-  _goBack(backFromIndex, duration) {
+  _goBack(backFromIndex: number, duration: number) {
     const { navigation, position, scenes } = this.props.transitionProps;
     const toValue = Math.max(backFromIndex - 1, 0);
 
@@ -234,6 +302,7 @@ class StackViewLayout extends React.Component {
     };
 
     if (Platform.OS === 'ios' && supportsImprovedSpringAnimation()) {
+      // @ts-ignore
       Animated.spring(position, {
         toValue,
         stiffness: 7000,
@@ -245,6 +314,7 @@ class StackViewLayout extends React.Component {
         useNativeDriver: USE_NATIVE_DRIVER,
       }).start(onCompleteAnimation);
     } else {
+      // @ts-ignore
       Animated.timing(position, {
         toValue,
         duration,
@@ -254,7 +324,7 @@ class StackViewLayout extends React.Component {
     }
   }
 
-  _onFloatingHeaderLayout = e => {
+  _onFloatingHeaderLayout = (e: LayoutChangeEvent) => {
     const { height } = e.nativeEvent.layout;
     if (height !== this.state.floatingHeaderHeight) {
       this.setState({ floatingHeaderHeight: height });
@@ -307,7 +377,7 @@ class StackViewLayout extends React.Component {
         enabled={index > 0 && this._isGestureEnabled()}
       >
         <Animated.View
-          style={[styles.container, this._transitionConfig.containerStyle]}
+          style={[styles.container, this._transitionConfig!.containerStyle]}
         >
           <StackGestureContext.Provider value={this.panGestureRef}>
             <ScreenContainer style={styles.scenes}>
@@ -320,7 +390,7 @@ class StackViewLayout extends React.Component {
     );
   }
 
-  componentDidUpdate(prevProps) {
+  componentDidUpdate(prevProps: Props) {
     const { state: prevState } = prevProps.transitionProps.navigation;
     const { state } = this.props.transitionProps.navigation;
     if (prevState.index !== state.index) {
@@ -332,7 +402,10 @@ class StackViewLayout extends React.Component {
     const { scene } = this.props.transitionProps;
     const { options } = scene.descriptor;
     const {
-      gestureResponseDistance: userGestureResponseDistance = {},
+      gestureResponseDistance: userGestureResponseDistance = {} as {
+        vertical?: number;
+        horizontal?: number;
+      },
     } = options;
 
     // Doesn't make sense for a response distance of 0, so this works fine
@@ -349,7 +422,8 @@ class StackViewLayout extends React.Component {
     const isMotionInverted = this._isMotionInverted();
 
     if (this._isMotionVertical()) {
-      const height = layout.height.__getValue();
+      // @ts-ignore
+      const height: number = layout.height.__getValue();
 
       return {
         maxDeltaX: 15,
@@ -359,7 +433,8 @@ class StackViewLayout extends React.Component {
           : { bottom: -height + gestureResponseDistance },
       };
     } else {
-      const width = layout.width.__getValue();
+      // @ts-ignore
+      const width: number = layout.width.__getValue();
       const hitSlop = -width + gestureResponseDistance;
 
       return {
@@ -403,7 +478,7 @@ class StackViewLayout extends React.Component {
     }
   }
 
-  _computeHorizontalGestureValue({ translationX }) {
+  _computeHorizontalGestureValue({ translationX }: { translationX: number }) {
     const {
       transitionProps: { navigation, layout },
     } = this.props;
@@ -411,7 +486,8 @@ class StackViewLayout extends React.Component {
     const { index } = navigation.state;
 
     // TODO: remove this __getValue!
-    const distance = layout.width.__getValue();
+    // @ts-ignore
+    const distance: number = layout.width.__getValue();
 
     const x = this._isMotionInverted() ? -1 * translationX : translationX;
 
@@ -419,7 +495,7 @@ class StackViewLayout extends React.Component {
     return clamp(index - 1, value, index);
   }
 
-  _computeVerticalGestureValue({ translationY }) {
+  _computeVerticalGestureValue({ translationY }: { translationY: number }) {
     const {
       transitionProps: { navigation, layout },
     } = this.props;
@@ -427,17 +503,22 @@ class StackViewLayout extends React.Component {
     const { index } = navigation.state;
 
     // TODO: remove this __getValue!
-    const distance = layout.height.__getValue();
+    // @ts-ignore
+    const distance: number = layout.height.__getValue();
 
     const y = this._isMotionInverted() ? -1 * translationY : translationY;
     const value = index - y / distance;
     return clamp(index - 1, value, index);
   }
 
-  _handlePanGestureStateChange = ({ nativeEvent }) => {
-    if (nativeEvent.oldState === State.ACTIVE) {
+  _handlePanGestureStateChange = ({
+    nativeEvent,
+  }: PanGestureHandlerGestureEvent) => {
+    // @ts-ignore
+    if (nativeEvent.oldState === GestureState.ACTIVE) {
       // Gesture was cancelled! For example, some navigation state update
       // arrived while the gesture was active that cancelled it out
+      // @ts-ignore
       if (this.positionSwitch.__getValue() === 1) {
         return;
       }
@@ -447,7 +528,7 @@ class StackViewLayout extends React.Component {
       } else {
         this._handleReleaseHorizontal(nativeEvent);
       }
-    } else if (nativeEvent.state === State.ACTIVE) {
+    } else if (nativeEvent.state === GestureState.ACTIVE) {
       this.props.onGestureBegin && this.props.onGestureBegin();
 
       // Switch to using gesture position
@@ -477,6 +558,7 @@ class StackViewLayout extends React.Component {
 
   _prepareGesture() {
     if (!this._isGestureEnabled()) {
+      // @ts-ignore
       if (this.positionSwitch.__getValue() !== 1) {
         this.positionSwitch.setValue(1);
       }
@@ -486,7 +568,9 @@ class StackViewLayout extends React.Component {
 
     // We can't run the gesture if width or height layout is unavailable
     if (
+      // @ts-ignore
       this.props.transitionProps.layout.width.__getValue() === 0 ||
+      // @ts-ignore
       this.props.transitionProps.layout.height.__getValue() === 0
     ) {
       return;
@@ -568,6 +652,7 @@ class StackViewLayout extends React.Component {
       this._immediateIndex == null ? index : this._immediateIndex;
 
     // Calculate animate duration according to gesture speed and moved distance
+    // @ts-ignore
     const distance = layout.width.__getValue();
     const movementDirection = this._isMotionInverted() ? -1 : 1;
     const movedDistance = movementDirection * nativeEvent.translationX;
@@ -830,7 +915,7 @@ class StackViewLayout extends React.Component {
     }
   }
 
-  _renderCard = scene => {
+  _renderCard = (scene: Scene) => {
     const {
       transitionProps,
       shadowEnabled,
@@ -839,7 +924,7 @@ class StackViewLayout extends React.Component {
       cardStyle,
     } = this.props;
 
-    const { screenInterpolator } = this._transitionConfig;
+    const { screenInterpolator } = this._transitionConfig as TransitionConfig;
     const style =
       screenInterpolator &&
       screenInterpolator({
@@ -894,6 +979,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   floatingHeader: {
+    // @ts-ignore
     position: Platform.select({ default: 'absolute', web: 'fixed' }),
     left: 0,
     top: 0,

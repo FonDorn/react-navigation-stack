@@ -1,44 +1,46 @@
-import React from 'react';
-import invariant from '../../utils/invariant';
+import * as React from 'react';
+import { Animated, View } from 'react-native';
+import { NavigationProp, Scene } from '../../types';
 
 const MIN_POSITION_OFFSET = 0.01;
+
+export type PointerEvents = 'box-only' | 'none' | 'auto';
+
+export type InputProps = {
+  scene: Scene;
+  navigation: NavigationProp;
+  realPosition: Animated.AnimatedInterpolation;
+};
+
+export type InjectedProps = {
+  pointerEvents: PointerEvents;
+  onComponentRef: (ref: View | null) => void;
+};
 
 /**
  * Create a higher-order component that automatically computes the
  * `pointerEvents` property for a component whenever navigation position
  * changes.
  */
-export default function createPointerEventsContainer(Component) {
-  class Container extends React.Component {
-    constructor(props, context) {
-      super(props, context);
-      this._pointerEvents = this._computePointerEvents();
-    }
+export default function createPointerEventsContainer<
+  Props extends InjectedProps & InputProps
+>(
+  Component: React.ComponentType<Props>
+): React.ComponentType<Pick<Props, Exclude<keyof Props, keyof InjectedProps>>> {
+  class Container extends React.Component<Props> {
+    _pointerEvents = this._computePointerEvents();
+    _component: View | null = null;
+    _positionListener: AnimatedValueSubscription | undefined;
 
     componentWillUnmount() {
       this._positionListener && this._positionListener.remove();
     }
 
-    render() {
-      this._bindPosition();
-      this._pointerEvents = this._computePointerEvents();
-
-      return (
-        <Component
-          {...this.props}
-          pointerEvents={this._pointerEvents}
-          onComponentRef={this._onComponentRef}
-        />
-      );
-    }
-
-    _onComponentRef = component => {
+    _onComponentRef = (component: View | null) => {
       this._component = component;
-      if (component) {
-        invariant(
-          typeof component.setNativeProps === 'function',
-          'component must implement method `setNativeProps`'
-        );
+
+      if (component && typeof component.setNativeProps !== 'function') {
+        throw new Error('Component must implement method `setNativeProps`');
       }
     };
 
@@ -73,6 +75,7 @@ export default function createPointerEventsContainer(Component) {
         return scene.index > navigation.state.index ? 'box-only' : 'none';
       }
 
+      // @ts-ignore
       const offset = realPosition.__getAnimatedValue() - navigation.state.index;
       if (Math.abs(offset) > MIN_POSITION_OFFSET) {
         // The positon is still away from scene's index.
@@ -83,12 +86,29 @@ export default function createPointerEventsContainer(Component) {
 
       return 'auto';
     }
+
+    render() {
+      this._bindPosition();
+      this._pointerEvents = this._computePointerEvents();
+
+      return (
+        <Component
+          {...this.props}
+          pointerEvents={this._pointerEvents}
+          onComponentRef={this._onComponentRef}
+        />
+      );
+    }
   }
-  return Container;
+
+  return Container as any;
 }
 
 class AnimatedValueSubscription {
-  constructor(value, callback) {
+  _value: Animated.Value;
+  _token: string;
+
+  constructor(value: Animated.Value, callback: Animated.ValueListenerCallback) {
     this._value = value;
     this._token = value.addListener(callback);
   }
